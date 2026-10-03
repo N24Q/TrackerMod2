@@ -1,0 +1,11 @@
+{
+  "tooltip.tooltracker.blocks_mined": "Blocks Mined: %s",
+  "tooltip.tooltracker.blocks_tilled": "Blocks Tilled: %s",
+  "tooltip.tooltracker.sheep_sheared": "Sheep Sheared: %s",
+  "tooltip.tooltracker.mobs_killed": "Mobs Killed: %s",
+  "tooltip.tooltracker.flight_time": "Flight Time: %s",
+  "tooltip.tooltracker.items_caught": "Items Caught: %s",
+  "tooltip.tooltracker.attacks_blocked": "Attacks Blocked: %s",
+  "tooltip.tooltracker.fires_lit": "Fires Lit: %s",
+  "tooltip.tooltracker.blocks_brushed": "Blocks Brushed: %s"
+}
