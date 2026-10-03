@@ -379,6 +379,7 @@ public final class TrackerStore {
             if (list != null) {
                 for (ToolRecord r : list) {
                     if (r != null && r.id != null && !r.id.isEmpty()) {
+                        upgrade(r);
                         records.put(r.id, r);
                     }
                 }
@@ -386,6 +387,25 @@ public final class TrackerStore {
             ToolTracker.LOGGER.info("Loaded {} tracked tools from {}", records.size(), path);
         } catch (Exception e) {
             ToolTracker.LOGGER.error("Could not read tool stats from {}", path, e);
+        }
+    }
+
+    /**
+     * Keeps stats saved by older versions of the mod. Fields that were missing in older
+     * files get safe defaults, and renamed stats are mapped to their new names.
+     */
+    private static void upgrade(ToolRecord r) {
+        if (r.item == null) {
+            r.item = "";
+        }
+        if (r.fingerprint == null) {
+            r.fingerprint = "";
+        }
+        if (r.stat == null) {
+            r.stat = "";
+        }
+        if (r.stat.equals("FISH_CAUGHT")) {
+            r.stat = StatType.ITEMS_CAUGHT.name();
         }
     }
 

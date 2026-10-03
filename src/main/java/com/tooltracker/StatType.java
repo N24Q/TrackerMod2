@@ -1,6 +1,7 @@
 package com.tooltracker;
 
 import java.util.Locale;
+import net.minecraft.ChatFormatting;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.tags.ItemTags;
 import net.minecraft.world.item.ItemStack;
@@ -40,6 +41,30 @@ public enum StatType {
         }
         return String.format(Locale.ROOT, "%,d", value);
     }
+
+    /**
+     * Tooltip colour for a count. The colour steps up each time the number gains a digit
+     * (10, 100, 1,000 ...) and stays the same from 1,000,000 onwards.
+     * Flight time is measured in seconds for this.
+     */
+    public ChatFormatting milestoneColor(long value) {
+        long n = this == FLIGHT_TIME ? value / 20L : value;
+        int tier = 0;
+        for (long threshold = 10; tier < MILESTONE_COLORS.length - 1 && n >= threshold; threshold *= 10) {
+            tier++;
+        }
+        return MILESTONE_COLORS[tier];
+    }
+
+    private static final ChatFormatting[] MILESTONE_COLORS = {
+            ChatFormatting.GRAY,         // 0 - 9
+            ChatFormatting.WHITE,        // 10+
+            ChatFormatting.GREEN,        // 100+
+            ChatFormatting.AQUA,         // 1,000+
+            ChatFormatting.LIGHT_PURPLE, // 10,000+
+            ChatFormatting.GOLD,         // 100,000+
+            ChatFormatting.RED           // 1,000,000+ (final)
+    };
 
     /** Works out which statistic an item tracks, or null if it is not a tracked tool. */
     @Nullable

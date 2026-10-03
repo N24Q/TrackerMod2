@@ -14,6 +14,21 @@ Adds one usage line to the tooltip of every tool, weapon and piece of gear.
 | Flint and Steel | Fires Lit: X |
 | Brush | Blocks Brushed: X |
 
+The stat line sits directly below the item's enchantments (or below the name if it has none), above the
+"When in Main Hand" section. Its colour steps up every time the number gains a digit:
+
+| Count | Colour |
+|---|---|
+| 0 – 9 | Gray |
+| 10+ | White |
+| 100+ | Green |
+| 1,000+ | Aqua |
+| 10,000+ | Light Purple |
+| 100,000+ | Gold |
+| 1,000,000+ | Red (final) |
+
+Elytra flight time uses seconds for these milestones.
+
 Modded items are picked up automatically through the standard item tags (`#minecraft:pickaxes`, `#c:tools/bow`, etc.).
 
 ## Building
@@ -24,13 +39,18 @@ You need **JDK 25** installed.
 ./gradlew build          (Windows: gradlew.bat build)
 ```
 
-The mod jar is written to `build/libs/tooltracker-1.0.0.jar`. Put it in your `mods` folder.
+The mod jar is written to `build/libs/tooltracker-1.1.0.jar`. Put it in your `mods` folder.
 Only you need it installed; servers don't need it.
 
 To test in a dev client: `./gradlew runClient`.
 
 If Gradle can't find NeoForge `26.3.0.38-beta`, change `neo_version` in `gradle.properties` to the exact version shown on
 https://projects.neoforged.net/neoforged/neoforge
+
+## Updating
+
+Replace the old jar in your `mods` folder with the new one. Your stats are stored separately in
+`.minecraft/tooltracker/` and are kept across updates.
 
 ## How it works
 

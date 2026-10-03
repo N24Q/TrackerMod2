@@ -2,18 +2,22 @@ package com.tooltracker;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import it.unimi.dsi.fastutil.objects.Object2IntMap;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import net.minecraft.ChatFormatting;
+import java.util.Set;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ClientLevel;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.client.resources.sounds.SoundInstance;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Holder;
+import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.MinecraftServer;
@@ -31,6 +35,8 @@ import net.minecraft.world.entity.projectile.FireworkRocketEntity;
 import net.minecraft.world.entity.projectile.arrow.AbstractArrow;
 import net.minecraft.world.entity.projectile.arrow.ThrownTrident;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.enchantment.Enchantment;
+import net.minecraft.world.item.enchantment.ItemEnchantments;
 import net.minecraft.world.level.block.BaseFireBlock;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -177,7 +183,33 @@ public final class ClientEvents {
             return;
         }
         long value = loaded ? STORE.countFor(stack, type) : 0;
-        event.getToolTip().add(Component.translatable(type.translationKey(), type.format(value)).withStyle(ChatFormatting.GRAY));
+        Component line = Component.translatable(type.translationKey(), type.format(value)).withStyle(type.milestoneColor(value));
+        List<Component> tooltip = event.getToolTip();
+        tooltip.add(insertIndex(stack, tooltip), line);
+    }
+
+    /**
+     * Where the stat line goes: directly below the last enchantment line, or directly below
+     * the item name if the item has no enchantments. This keeps it above the
+     * "When in Main Hand" attribute section.
+     */
+    private static int insertIndex(ItemStack stack, List<Component> tooltip) {
+        if (tooltip.isEmpty()) {
+            return 0;
+        }
+        ItemEnchantments enchantments = stack.get(DataComponents.ENCHANTMENTS);
+        if (enchantments != null) {
+            Set<String> names = new HashSet<>();
+            for (Object2IntMap.Entry<Holder<Enchantment>> entry : enchantments.entrySet()) {
+                names.add(Enchantment.getFullname(entry.getKey(), entry.getIntValue()).getString());
+            }
+            for (int i = tooltip.size() - 1; i >= 1; i--) {
+                if (names.contains(tooltip.get(i).getString())) {
+                    return i + 1;
+                }
+            }
+        }
+        return 1;
     }
 
     // ------------------------------------------------------------------ per-tick work
