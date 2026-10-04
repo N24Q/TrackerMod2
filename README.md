@@ -39,7 +39,7 @@ You need **JDK 25** installed.
 ./gradlew build          (Windows: gradlew.bat build)
 ```
 
-The mod jar is written to `build/libs/tooltracker-1.1.0.jar`. Put it in your `mods` folder.
+The mod jar is written to `build/libs/tooltracker-1.2.0.jar`. Put it in your `mods` folder.
 Only you need it installed; servers don't need it.
 
 To test in a dev client: `./gradlew runClient`.
@@ -60,8 +60,15 @@ A client-side mod can't write data onto items on a server, so stats are saved on
 * Only **your** actions count. A tool someone hands you shows 0 until you use it.
 * Every tool starts at 0. A tool gets an entry the first time you use it.
 * Each tool is recognised by its item type, name, enchantments and durability, so it keeps its count when you move it around,
-  put it in a chest, log out, or repair it with Mending. Tools taken out of an anvil, grindstone, smithing table
-  (e.g. netherite upgrade), crafting grid or enchanting table keep their count.
+  put it in a chest, log out, or repair it with Mending.
+* Stats carry through:
+  * **Anvil**: combining enchantments, repairing with materials, renaming.
+  * **Grindstone**: disenchanting, or combining two tools to repair.
+  * **Smithing table**: diamond to netherite upgrades, armour trims.
+  * **Crafting grid**: combining two tools to repair them.
+  * **Enchanting table**.
+* When two tools you have used are combined, the result gets **both counts added together**
+  (e.g. a pickaxe with 1,200 blocks + one with 300 = 1,500). Hovering the output slot shows the combined count before you take it.
 
 ### Known limits
 

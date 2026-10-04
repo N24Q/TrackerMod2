@@ -30,6 +30,7 @@ import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.inventory.EnchantmentMenu;
+import net.minecraft.world.inventory.GrindstoneMenu;
 import net.minecraft.world.inventory.ResultContainer;
 import net.minecraft.world.inventory.Slot;
 import net.minecraft.world.item.ItemStack;
@@ -51,7 +52,11 @@ import org.jetbrains.annotations.Nullable;
 public final class TrackerStore {
     public static final int OFFHAND_KEY = 100;
     public static final int CHEST_KEY = 101;
+    /** The item held on the mouse cursor while a menu is open. */
+    public static final int CURSOR_KEY = 102;
     private static final long TRANSFER_WINDOW_TICKS = 400;
+    /** How long a result can sit on the cursor (or wait) and still inherit the tools that made it. */
+    private static final long LINK_WINDOW_TICKS = 20L * 60L * 10L;
 
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
 
@@ -64,6 +69,20 @@ public final class TrackerStore {
     private final Map<ItemStack, String> identity = new IdentityHashMap<>();
     /** record id -> last tick it was seen in a crafting/anvil/etc. input slot */
     private final Map<String, Long> pendingTransfers = new HashMap<>();
+    /** merged-away record id -> record it was merged into (so in-flight kills still count) */
+    private final Map<String, String> aliases = new HashMap<>();
+
+    /**
+     * The tool currently shown in the output slot of an anvil, grindstone, smithing table or
+     * crafting grid, and the tracked tools in the input slots that produce it.
+     */
+    private record ResultLink(ItemStack result, String signature, List<String> inputIds, long tick) {}
+
+    @Nullable
+    private ResultLink link;
+    /** Record of the tool sitting in an enchanting table, which is enchanted in place. */
+    @Nullable
+    private String enchantSlotRecord;
 
     @Nullable
     private Path file;
@@ -77,11 +96,7 @@ public final class TrackerStore {
 
     /** Custom name + enchantments. Damage is matched separately. */
     public static String fingerprint(ItemStack stack) {
-        StringBuilder sb = new StringBuilder();
-        Component name = stack.get(DataComponents.CUSTOM_NAME);
-        if (name != null) {
-            sb.append(name.getString());
-        }
+        StringBuilder sb = new StringBuilder(namePart(stack));
         sb.append('|');
         ItemEnchantments enchantments = stack.get(DataComponents.ENCHANTMENTS);
         if (enchantments != null) {
@@ -93,6 +108,16 @@ public final class TrackerStore {
             sb.append(String.join(",", parts));
         }
         return sb.toString();
+    }
+
+    private static String namePart(ItemStack stack) {
+        Component name = stack.get(DataComponents.CUSTOM_NAME);
+        return name != null ? name.getString() : "";
+    }
+
+    private static boolean isEnchanted(ItemStack stack) {
+        ItemEnchantments enchantments = stack.get(DataComponents.ENCHANTMENTS);
+        return enchantments != null && !enchantments.entrySet().isEmpty();
     }
 
     private static String signature(ItemStack stack) {
@@ -112,6 +137,9 @@ public final class TrackerStore {
         }
         slots.put(OFFHAND_KEY, player.getItemBySlot(EquipmentSlot.OFFHAND));
         slots.put(CHEST_KEY, player.getItemBySlot(EquipmentSlot.CHEST));
+        if (player.containerMenu != null) {
+            slots.put(CURSOR_KEY, player.containerMenu.getCarried());
+        }
         return slots;
     }
 
@@ -172,30 +200,42 @@ public final class TrackerStore {
             }
         }
 
-        // Pass 4: an item that just appeared, coming out of an anvil/grindstone/smithing
-        // table/crafting grid/enchanting table, takes over the record of the tool that went in.
+        // Pass 4: an item that just appeared, coming out of an anvil, grindstone, smithing
+        // table or crafting grid. It takes over the record(s) of the tool(s) that went in;
+        // when two used tools are combined, their counts are added together.
+        if (link != null && now - link.tick() > LINK_WINDOW_TICKS) {
+            link = null;
+        }
         for (Iterator<Integer> it = unresolved.iterator(); it.hasNext(); ) {
             int key = it.next();
             ItemStack stack = slots.get(key);
-            if (signatures.get(key).equals(lastSignatures.get(key))) {
+            String sig = signatures.get(key);
+            if (sig.equals(lastSignatures.get(key))) {
                 continue; // was already sitting here last tick, not a new item
             }
-            StatType type = StatType.of(stack);
-            ToolRecord best = null;
-            for (Map.Entry<String, Long> p : pendingTransfers.entrySet()) {
-                if (now - p.getValue() > TRANSFER_WINDOW_TICKS || used.contains(p.getKey()) || stillInMenu.contains(p.getKey())) {
-                    continue;
-                }
-                ToolRecord r = records.get(p.getKey());
-                if (r != null && type != null && r.stat.equals(type.name()) && (best == null || r.count > best.count)) {
-                    best = r;
-                }
+            ToolRecord target = null;
+            if (link != null && link.signature().equals(sig) && link.inputIds().stream().noneMatch(stillInMenu::contains)) {
+                target = merge(link.inputIds(), stack, used);
+                link = null;
             }
-            if (best != null) {
-                refresh(best, stack);
-                fresh.put(key, best.id);
-                used.add(best.id);
-                pendingTransfers.remove(best.id);
+            if (target == null) {
+                // Fallback: any tracked tool of the same kind that was just used up in a menu.
+                StatType type = StatType.of(stack);
+                List<String> candidates = new ArrayList<>();
+                for (Map.Entry<String, Long> p : pendingTransfers.entrySet()) {
+                    if (now - p.getValue() > TRANSFER_WINDOW_TICKS || used.contains(p.getKey()) || stillInMenu.contains(p.getKey())) {
+                        continue;
+                    }
+                    ToolRecord r = records.get(p.getKey());
+                    if (r != null && type != null && r.stat.equals(type.name())) {
+                        candidates.add(r.id);
+                    }
+                }
+                target = merge(candidates, stack, used);
+            }
+            if (target != null) {
+                fresh.put(key, target.id);
+                used.add(target.id);
                 it.remove();
             }
         }
@@ -244,42 +284,122 @@ public final class TrackerStore {
     }
 
     /**
-     * Notes tracked tools sitting in the input slots of an anvil, grindstone, smithing table,
-     * crafting grid or enchanting table. Returns the records currently present there.
+     * Looks at an open anvil, grindstone, smithing table, crafting grid or enchanting table.
+     * Notes the tracked tools in its input slots, links the output to them, and follows a
+     * tool being enchanted in place. Returns the records currently sitting in the menu.
      */
     private Set<String> scanOpenMenu(Player player, long now) {
         Set<String> present = new HashSet<>();
         AbstractContainerMenu menu = player.containerMenu;
         if (menu == null) {
+            enchantSlotRecord = null;
             return present;
         }
-        boolean transferMenu = menu instanceof EnchantmentMenu;
-        if (!transferMenu) {
-            for (Slot slot : menu.slots) {
-                if (slot.container instanceof ResultContainer) {
-                    transferMenu = true;
-                    break;
+
+        // Enchanting table: the tool is changed in place, so follow it through the change.
+        if (menu instanceof EnchantmentMenu && !menu.slots.isEmpty()) {
+            ItemStack stack = menu.getSlot(0).getItem();
+            ToolRecord r = null;
+            if (StatType.of(stack) != null) {
+                r = findExact(stack, Set.of());
+                ToolRecord prev = enchantSlotRecord == null ? null : records.get(enchantSlotRecord);
+                if (r == null && prev != null && prev.item.equals(itemId(stack)) && prev.damage == stack.getDamageValue()
+                        && prev.fingerprint.equals(namePart(stack) + "|") && isEnchanted(stack)) {
+                    refresh(prev, stack);
+                    r = prev;
                 }
             }
-        }
-        if (!transferMenu) {
-            return present;
-        }
-        for (Slot slot : menu.slots) {
-            if (slot.container instanceof Inventory || slot.container instanceof ResultContainer) {
-                continue;
-            }
-            ItemStack stack = slot.getItem();
-            if (StatType.of(stack) == null) {
-                continue;
-            }
-            ToolRecord r = findExact(stack, Set.of());
+            enchantSlotRecord = r == null ? null : r.id;
             if (r != null) {
                 pendingTransfers.put(r.id, now);
                 present.add(r.id);
             }
+            return present;
+        }
+        enchantSlotRecord = null;
+
+        List<Slot> inputs = new ArrayList<>();
+        List<Slot> results = new ArrayList<>();
+        for (int i = 0; i < menu.slots.size(); i++) {
+            Slot slot = menu.slots.get(i);
+            if (slot.container instanceof Inventory) {
+                continue;
+            }
+            if (slot.container instanceof ResultContainer || (menu instanceof GrindstoneMenu && i == 2)) {
+                results.add(slot);
+            } else {
+                inputs.add(slot);
+            }
+        }
+        if (results.isEmpty()) {
+            return present; // a chest or similar, not a crafting-style menu
+        }
+
+        List<ToolRecord> inputRecords = new ArrayList<>();
+        for (Slot slot : inputs) {
+            ItemStack stack = slot.getItem();
+            if (StatType.of(stack) == null) {
+                continue;
+            }
+            ToolRecord r = findExact(stack, present);
+            if (r != null) {
+                pendingTransfers.put(r.id, now);
+                present.add(r.id);
+                inputRecords.add(r);
+            }
+        }
+
+        for (Slot slot : results) {
+            ItemStack result = slot.getItem();
+            StatType type = StatType.of(result);
+            if (type == null) {
+                continue;
+            }
+            List<String> ids = new ArrayList<>();
+            for (ToolRecord r : inputRecords) {
+                if (r.stat.equals(type.name())) {
+                    ids.add(r.id);
+                }
+            }
+            if (!ids.isEmpty()) {
+                link = new ResultLink(result, signature(result), ids, now);
+            }
         }
         return present;
+    }
+
+    /**
+     * Moves the given records onto a new item. With more than one record (two used tools
+     * combined), the counts are added together into the record with the highest count.
+     */
+    @Nullable
+    private ToolRecord merge(List<String> ids, ItemStack stack, Set<String> used) {
+        ToolRecord target = null;
+        List<ToolRecord> parts = new ArrayList<>();
+        for (String id : ids) {
+            ToolRecord r = records.get(id);
+            if (r == null || used.contains(id) || parts.contains(r)) {
+                continue;
+            }
+            parts.add(r);
+            if (target == null || r.count > target.count) {
+                target = r;
+            }
+        }
+        if (target == null) {
+            return null;
+        }
+        for (ToolRecord r : parts) {
+            pendingTransfers.remove(r.id);
+            if (r != target) {
+                target.count += r.count;
+                records.remove(r.id);
+                aliases.put(r.id, target.id);
+            }
+        }
+        target.inFlight = false;
+        refresh(target, stack);
+        return target;
     }
 
     @Nullable
@@ -346,15 +466,34 @@ public final class TrackerStore {
         if (recordId == null) {
             return;
         }
-        ToolRecord r = records.get(recordId);
+        ToolRecord r = records.get(resolve(recordId));
         if (r != null) {
             r.count += amount;
             dirty = true;
         }
     }
 
+    private String resolve(String recordId) {
+        String id = recordId;
+        for (int i = 0; i < 16 && aliases.containsKey(id); i++) {
+            id = aliases.get(id);
+        }
+        return id;
+    }
+
     /** The count to show in a tooltip. Tools that have never been used by this player show 0. */
     public long countFor(ItemStack stack, StatType type) {
+        if (link != null && link.result() == stack) {
+            // Output slot preview: the combined count the tool will have once taken.
+            long sum = 0;
+            for (String id : link.inputIds()) {
+                ToolRecord r = records.get(id);
+                if (r != null && r.stat.equals(type.name())) {
+                    sum += r.count;
+                }
+            }
+            return sum;
+        }
         String rid = identity.get(stack);
         ToolRecord r = rid == null ? null : records.get(rid);
         if (r == null) {
@@ -438,6 +577,9 @@ public final class TrackerStore {
         lastSignatures = new HashMap<>();
         identity.clear();
         pendingTransfers.clear();
+        aliases.clear();
+        link = null;
+        enchantSlotRecord = null;
         file = null;
         dirty = false;
     }
